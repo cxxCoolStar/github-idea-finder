@@ -45,7 +45,6 @@ README / 元数据检查
 github-idea-finder/
 ├── SKILL.md                    # Agent 使用说明
 ├── README.md                   # 本文档
-├── TODO.md
 ├── .env.example                # 环境变量示例
 ├── agents/openai.yaml          # Skill 展示信息
 └── scripts/
