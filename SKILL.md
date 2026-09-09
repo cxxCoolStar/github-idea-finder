@@ -1,67 +1,90 @@
 ---
 name: github-idea-finder
-description: Find open-source GitHub alternatives from a product idea, then compare feature fit, project health, license, and deployment evidence. Use when a user wants to discover reusable open-source products or competitors from a natural-language idea; do not use for ordinary GitHub issue, PR, or code operations.
+description: Discover open-source GitHub alternatives from a product idea through bounded, multi-round search, README inspection, evidence verification, and project comparison. Use for finding reusable open-source products or competitors; do not use for ordinary GitHub issue, PR, or code operations.
 ---
 
 # Github Idea Finder
 
-Turn an idea into a short, evidence-backed shortlist of GitHub repositories. Treat the result as a discovery aid, not proof that an exact competitor exists.
+Find a defensible shortlist of GitHub repositories from a product idea. Search is an iterative discovery process, not a single keyword query. Do not claim exhaustive coverage.
 
-## Workflow
+## Agent Loop
 
-1. Check whether the request is specific enough to search. If the user only names a broad product or a competitor, ask up to three focused questions before searching:
-   - Is the target a complete end-user product, a library/SDK, a plugin/skill, or an infrastructure component?
-   - Which 3-5 capabilities are mandatory? Ask for concrete user-visible behaviors rather than implementation labels.
-   - What deployment, platform, model, license, and maintenance constraints matter?
-   Offer a default interpretation when helpful, but label it and wait for confirmation if the distinction changes the search boundary.
-2. Turn the answers into a short Search Brief:
+1. Clarify the Search Brief before searching when the request is broad:
+   - complete product, library/SDK, component, or infrastructure;
    - target user and job to be done;
-   - must-have capabilities (3-8 concrete features);
-   - constraints such as self-hosting, platform, language, data source, and license;
-   - terms that describe the product category and terms that describe its implementation.
-3. Generate a capability evidence spec from the Search Brief. Let the AI produce one object per mandatory capability:
-   ```json
-   {
-     "canonical_capability": "tool calling",
-     "aliases": ["function calling", "tool invocation"],
-     "evidence_phrases": ["runs tools", "invokes external tools"],
-     "ambiguity_notes": ["A tool SDK alone does not prove an end-user product can call tools."]
-   }
-   ```
-   Keep aliases and evidence phrases grounded in the user's meaning. Do not invent product names or domain-specific exclusions. Pass these objects to the helper with repeated `--capability-spec` flags, or save them in JSON and use `--capability-spec-file`. The fixed aliases in the helper are only a generic fallback for older calls.
-4. Generate a query matrix from the Search Brief rather than one long natural-language query. Use 3-6 short English queries spanning:
-   - one broad product category anchor with no more than 2-3 key terms (for example, `open source AI agent` or `open source AI assistant`);
-   - product form and deployment (for example, `desktop AI agent`, `self-hosted autonomous agent`);
-   - core capabilities (for example, `AI agent tool use`, `AI agent task planning`);
-   - one or more relevant GitHub topics via `--topic`.
-   If the idea names a product, company, protocol, or distinctive brand, add an exact-name query and known aliases (for example, `"Acme Notes" in:name` and `acme-notes in:name`). Do not assume a category query will discover every named competitor. Pass each mandatory capability as a repeated `--must-have` flag.
-5. Run the bundled search helper for all query routes:
+   - 3-8 observable must-have capabilities;
+   - deployment, platform, model, license, and maintenance constraints.
+2. Create a session file outside the Skill directory, for example `work/github-idea-session.json`:
 
    ```powershell
-   python scripts/search_repos.py --idea "<original idea>" --target-form complete-product --must-have "<capability 1>" --must-have "<capability 2>" --capability-spec '{"canonical_capability":"<capability 1>","aliases":["..."],"evidence_phrases":["..."],"ambiguity_notes":["..."]}' --query "<query 1>" --query "<query 2>" --topic ai-agent --topic ai-assistant --limit 10 --fetch-limit 100 --readme --output json
+   python scripts/github_discovery.py session --state-file work/github-idea-session.json --idea "<original idea>" --max-rounds 4 --max-searches 30 --max-inspections 50
    ```
 
-   The helper runs each short query through GitHub's default `best-match` route, then separately searches README text and merges duplicate repositories before local evidence analysis. Use `--sort stars` only when the user explicitly wants a popularity-oriented scan. Set `GITHUB_TOKEN` in the process environment or in a local `.env` file. The helper reads only that key and never prints it. Without a token, GitHub's unauthenticated request limit is low. Keep `.env` out of distributable Skill packages; use `.env.example` as a template. The helper is read-only and uses GitHub's public REST API. Omit `--target-form` when the user wants all repository shapes; use the matching value from the Search Brief when they specify one.
-6. Inspect the returned `selection` evidence. Treat `component-or-extension`, `resource-or-list`, and `uncertain` as evidence labels, not automatic exclusions. A repository is a candidate only when its evidence matches the Search Brief. Use `ambiguity_notes` to explain why a phrase match is insufficient when applicable.
-7. Use the selection decision as a recommendation, not a fact: `adopt` means the collected evidence supports direct evaluation, `pilot` means run a small proof of concept, and `watch` means promising but incomplete evidence or a form/health gap. Never use Stars as a proxy for product fit.
-8. Return a concise report with:
-   - a one-sentence interpretation of the idea;
-   - a table containing repository, fit summary, matching capabilities, gaps, license, deployment signal, last update, and links;
-   - decision (`adopt`, `pilot`, or `watch`) and its hard-gate gaps for each candidate;
-   - 3-5 evidence-backed recommendations for what to reuse or investigate next;
-   - a "not a match" note for tempting but misclassified results when useful.
+3. Generate a Search Plan, not just aliases. Include several short query families:
+   - category: `open source AI agent`, `open source AI assistant`;
+   - product form: `desktop AI agent`, `self-hosted autonomous agent`;
+   - observable behavior: `AI agent tool execution`, `AI agent task planning`;
+   - community vocabulary discovered from the idea or later README evidence, such as `agent harness`, `agent OS`, or `computer-use agent`;
+   - relevant GitHub topics.
+4. Run round one for broad recall. Use no semantic hard gates at this stage:
 
-## Evidence rules
+   ```powershell
+   python scripts/github_discovery.py search --state-file work/github-idea-session.json --query "<query 1>" --query "<query 2>" --query "<query 3>" --topic "<topic>" --fetch-limit 30
+   ```
 
-- Link directly to the repository and cite README, topics, directory, release, or license evidence for material claims.
-- Separate `feature_fit` from `health_score`; the script's health score only estimates maintenance and usability signals.
-- Treat missing license, stale updates, archived status, and generated or placeholder READMEs as risks, not assumptions.
-- Do not claim exhaustive coverage or repeat the premise that 99% of products exist on GitHub.
+   The command returns new repositories and their discovery routes. Do not discard a candidate only because its type is uncertain.
+5. Select a diverse inspection batch. Include candidates from different routes, not only the highest-starred repositories:
 
-## Output modes
+   ```powershell
+   python scripts/github_discovery.py inspect --state-file work/github-idea-session.json --repo owner/repo --repo another/repo
+   ```
 
-- Use `--output markdown` for a human-readable first pass.
-- Use `--output json` when another agent or later step will perform semantic reranking.
-- Use `--no-details` only when rate limits require a fast, shallow scan; disclose that README and license evidence were not collected.
+   Inspection reads the repository metadata and README, records license/health/deployment signals, and extracts GitHub repositories linked from the README. Read the returned README evidence yourself and identify:
+   - the project's own product vocabulary;
+   - unresolved mandatory capabilities;
+   - alternatives, integrations, and related repositories;
+   - new query terms that may discover different projects.
+6. Run the next round using only genuinely new queries and repositories. Search both newly discovered vocabulary and repositories linked from inspected READMEs. Keep a ledger in the session file; never repeat a query just to increase result volume.
+7. Inspect the strongest new candidates and any high-value linked repositories. For each mandatory capability, record `supported`, `not-supported`, or `uncertain`, a confidence, and a direct README or release quote. A phrase match is not sufficient when the ambiguity note says a weaker interpretation is possible.
+8. Stop when one condition is met:
+   - the session reaches its round, search, or inspection budget;
+   - two consecutive rounds produce no new high-value repositories;
+   - the leading candidates have sufficient evidence for comparison;
+   - remaining results are duplicates, forks, resource lists, or clearly outside the Search Brief.
 
-The helper implementation and its offline tests live in `scripts/search_repos.py` and `scripts/test_search_repos.py`.
+## Search Plan And Evidence
+
+Let the AI generate capability aliases, evidence phrases, ambiguity notes, and query terms from the current Search Brief and from inspected README evidence. Do not maintain a growing product-specific alias table or hard-code competitor names.
+
+Keep discovery and judgment separate:
+
+- discovery favors recall and route diversity;
+- inspection collects evidence;
+- the Agent judges semantic fit;
+- deterministic code handles API errors, rate limits, state, deduplication, and budgets.
+
+Use repository shape (`complete product`, `component`, `resource list`, or `uncertain`) as evidence, not an automatic blacklist. A repository can be a valid candidate even when its README uses unexpected terminology.
+
+## Final Report
+
+Return:
+
+- the interpreted product brief;
+- rounds and query families used;
+- a table of repository, product form, capability evidence, gaps, license, deployment signal, maintenance signal, and links;
+- a decision of `adopt`, `pilot`, or `watch` for each serious candidate;
+- evidence quotes for material claims;
+- a short `not a match` section for tempting but misclassified results;
+- a coverage note listing known candidates that were not found or were only found through a seeded exact-name query.
+
+Never use Stars as a proxy for product fit, and never claim that the search found every relevant project.
+
+## Implementation
+
+The Agent-facing entry point is `scripts/github_discovery.py`:
+
+- `session` creates or updates the bounded search ledger;
+- `search` performs one new query round and records discovery provenance;
+- `inspect` fetches repository evidence and extracts README-linked repositories.
+
+The script is intentionally not an autonomous LLM. The calling Agent chooses the next action while the script provides deterministic GitHub retrieval and state management.
