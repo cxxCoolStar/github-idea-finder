@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Idea Finder"
+  short_description: "Find and assess open-source alternatives from a product idea"
+  default_prompt: "Find open-source GitHub alternatives for this product idea, explain the feature fit and gaps, and include project-health, license, and deployment evidence."
