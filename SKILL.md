@@ -9,11 +9,17 @@ Find a defensible shortlist of GitHub repositories from a product idea. Search i
 
 ## Agent Loop
 
-1. Clarify the Search Brief before searching when the request is broad:
-   - complete product, library/SDK, component, or infrastructure;
-   - target user and job to be done;
-   - 3-8 observable must-have capabilities;
-   - deployment, platform, model, license, and maintenance constraints.
+1. Apply the clarification gate before any search:
+   - Decide whether the request already provides enough information to form a concrete Search Brief. A request is broad when product form, target user/use case, or the core outcome is still ambiguous (for example, "find an agriculture pest project").
+   - For a broad request, ask 3-5 high-value questions covering: complete product vs. algorithm/dataset/component/infrastructure; target user and job to be done; 3-8 must-have capabilities and expected inputs/outputs; and important platform, deployment, model, license, or maintenance constraints.
+   - Stop after asking those questions. Do not create a session file, call `github_discovery.py`, query GitHub, or present search results until the user answers and the Search Brief is confirmed.
+   - The only exception is an explicit user instruction to search first using stated assumptions (for example, "先按你的假设搜索"). In that case, record the assumptions as provisional Search Brief fields and disclose them in the final report; do not present them as user requirements.
+   - When the request is already specific enough, proceed directly but write the interpreted Search Brief before searching. The Search Brief must distinguish user-confirmed requirements from agent assumptions.
+   - Search Brief fields should include, when known:
+     - product form: complete product, library/SDK, component, dataset, algorithm, or infrastructure;
+     - target user, job to be done, and expected inputs/outputs;
+     - 3-8 observable must-have capabilities;
+     - deployment, platform, model, license, maintenance, and other hard constraints.
 2. Create a session file outside the Skill directory, for example `work/github-idea-session.json`:
 
    ```powershell
