@@ -70,7 +70,7 @@ Copy-Item .env.example .env
 GITHUB_TOKEN=ghp_your_token_here
 ```
 
-不要把真实 token 提交到 Git。`.env` 应加入 `.gitignore`。
+不要把真实 token 提交到 Git。仓库已通过 `.gitignore` 忽略 `.env`，仍应在提交前确认没有暂存凭据。
 
 ## 推荐用法
 
@@ -120,7 +120,7 @@ python scripts/github_discovery.py inspect `
 检查结果包括：
 
 - 仓库元数据、License、归档状态和活跃度信号
-- README 摘要
+- README 摘要；若 README 超过 6,000 个字符，结果会标记 `readme_truncated=true`，并保留完整 README 用于链接提取。README 请求失败会标记为 `readme_status=unavailable`，不会消耗检查次数，重试即可
 - README 中链接到的 GitHub 仓库
 - 后续搜索可以使用的新产品术语
 

@@ -171,15 +171,23 @@ def enrich(repo: dict[str, Any], token: str | None, include_readme: bool) -> dic
         "license": license_info.get("spdx_id"), "license_name": license_info.get("name"),
         "archived": bool(detail.get("archived")), "default_branch": detail.get("default_branch"),
         "pushed_at": detail.get("pushed_at"), "created_at": detail.get("created_at"),
-        "has_readme": None, "readme_excerpt": None, "health_score": health_score(detail),
+        "has_readme": None, "readme_status": "not-requested", "readme": None, "readme_excerpt": None,
+        "readme_length": None, "readme_truncated": False,
+        "health_score": health_score(detail),
     }
     if include_readme:
         try:
             readme = decode_readme(request_json(f"/repos/{urllib.parse.quote(full_name, safe='/')}/readme", token))
             result["has_readme"] = bool(readme)
+            result["readme_status"] = "available" if readme else "missing"
+            result["readme"] = readme or None
             result["readme_excerpt"] = readme[:6000] if readme else None
-        except RuntimeError:
-            result["has_readme"] = False
+            result["readme_length"] = len(readme)
+            result["readme_truncated"] = len(readme) > 6000
+        except RuntimeError as exc:
+            # Keep request failures retryable instead of treating them as a missing README.
+            result["readme_status"] = "unavailable"
+            result["readme_error"] = str(exc)
     return result
 
 
@@ -298,9 +306,13 @@ def search(args: argparse.Namespace) -> dict[str, Any]:
         route_stats.append({"query": query, "returned": len(payload.get("items", [])), "new": route_new})
         state["used_queries"].append(query)
 
-    for full_name, candidate in new_candidates.items():
-        state["candidates"][full_name] = candidate
-    add_unique(state["seen_repositories"], list(new_candidates))
+        # Persist each successful route so a later rate-limit or network error does not
+        # discard the completed portion of a batch.
+        for full_name, candidate in new_candidates.items():
+            state["candidates"][full_name] = candidate
+        add_unique(state["seen_repositories"], list(new_candidates))
+        save_state(state_path, state)
+
     state["round"] += 1
     save_state(state_path, state)
     return {
@@ -336,11 +348,17 @@ def inspect(args: argparse.Namespace) -> dict[str, Any]:
         try:
             result = enrich({"full_name": full_name}, token, include_readme=True)
             result["candidate_kind"] = candidate_kind(result)
-            result["related_repositories"] = repo_links(result.get("readme_excerpt"))
+            result["related_repositories"] = repo_links(result.get("readme"))
             related.extend(result["related_repositories"])
-            state["candidates"][full_name] = result
+            # Inspection enriches search metadata; it must not erase discovery provenance.
+            merged = dict(state["candidates"].get(full_name, {}))
+            merged.update(result)
+            state["candidates"][full_name] = merged
+            if result.get("readme_status") == "unavailable":
+                inspected.append({**merged, "inspection_retryable": True})
+                continue
             state["inspected_repositories"].append(full_name)
-            inspected.append(result)
+            inspected.append(merged)
         except RuntimeError as exc:
             inspected.append({"full_name": full_name, "inspection_error": str(exc)})
 

@@ -1,10 +1,11 @@
 import argparse
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from github_discovery import build_search_query, empty_state, load_state, repo_links, route_queries, save_state, search
+from github_discovery import build_search_query, empty_state, enrich, inspect, load_state, repo_links, route_queries, save_state, search
 
 
 class DiscoveryStateTests(unittest.TestCase):
@@ -79,8 +80,6 @@ class DiscoveryStateTests(unittest.TestCase):
                 request.assert_not_called()
 
     def test_inspection_budget_is_cumulative(self):
-        from github_discovery import inspect
-
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "session.json"
             state = empty_state("idea")
@@ -92,6 +91,75 @@ class DiscoveryStateTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     inspect(args)
                 enrich.assert_not_called()
+
+    def test_readme_failure_is_retryable_and_not_marked_inspected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.json"
+            save_state(path, empty_state("idea"))
+            metadata = {
+                "full_name": "example/repo", "html_url": "u", "description": "d",
+                "topics": [], "language": "Python", "stargazers_count": 1,
+                "forks_count": 0, "open_issues_count": 0, "license": {},
+                "archived": False, "default_branch": "main", "pushed_at": None,
+                "created_at": None,
+            }
+
+            def request(path_value, token=None):
+                if path_value.endswith("/readme"):
+                    raise RuntimeError("GitHub request timed out.")
+                return metadata
+
+            args = argparse.Namespace(state_file=str(path), repo=["example/repo"])
+            with patch("github_discovery.request_json", side_effect=request):
+                result = inspect(args)
+            state = load_state(path)
+            self.assertEqual(result["inspected"][0]["readme_status"], "unavailable")
+            self.assertNotIn("example/repo", state["inspected_repositories"])
+            self.assertTrue(result["inspected"][0]["inspection_retryable"])
+
+    def test_inspection_preserves_discovery_provenance_and_scans_full_readme(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.json"
+            state = empty_state("idea")
+            state["candidates"]["example/repo"] = {
+                "full_name": "example/repo", "discovered_by": ["query"], "route_rank": 4,
+            }
+            save_state(path, state)
+            long_readme = "x" * 6001 + " https://github.com/other/related "
+            enriched = {"full_name": "example/repo", "description": "d", "topics": [],
+                        "readme": long_readme, "readme_excerpt": long_readme[:6000],
+                        "readme_status": "available", "readme_truncated": True}
+            args = argparse.Namespace(state_file=str(path), repo=["example/repo"])
+            with patch("github_discovery.github_token", return_value=None), patch("github_discovery.enrich", return_value=enriched):
+                inspect(args)
+            saved = load_state(path)["candidates"]["example/repo"]
+            self.assertEqual(saved["discovered_by"], ["query"])
+            self.assertEqual(saved["route_rank"], 4)
+            self.assertIn("other/related", saved["related_repositories"])
+            self.assertTrue(saved["readme_truncated"])
+
+    def test_search_persists_completed_queries_before_later_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.json"
+            save_state(path, empty_state("idea"))
+            calls = []
+
+            def request(path_value, token=None):
+                calls.append(path_value)
+                if len(calls) == 2:
+                    raise RuntimeError("GitHub API rate limit reached.")
+                return {"items": [{"full_name": "example/repo", "html_url": "u",
+                                   "description": "d", "language": "Python",
+                                   "stargazers_count": 1, "forks_count": 0, "topics": []}]}
+
+            args = argparse.Namespace(state_file=str(path), idea=None, query=["q1", "q2"],
+                                     topic=[], fetch_limit=5, sort="best-match")
+            with patch("github_discovery.github_token", return_value=None), patch("github_discovery.request_json", side_effect=request):
+                with self.assertRaises(RuntimeError):
+                    search(args)
+            state = load_state(path)
+            self.assertEqual(state["used_queries"], ["q1"])
+            self.assertIn("example/repo", state["candidates"])
 
 
 if __name__ == "__main__":
