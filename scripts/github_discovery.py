@@ -3,6 +3,12 @@
 
 The model owns the search strategy. This module owns GitHub retrieval,
 repository inspection, deduplication, and the bounded session ledger.
+
+Experience persistence: `learn` appends or merges a lesson into a Markdown
+file that survives across sessions, so a fresh session can inherit prior
+search vocabulary, judgment standards, and pitfalls instead of starting from
+scratch. `experience` prints the digest of that file. The file is optional;
+a session only reads/writes it when an `--experience-file` is configured.
 """
 
 from __future__ import annotations
@@ -24,7 +30,12 @@ from typing import Any
 
 API_ROOT = "https://api.github.com"
 USER_AGENT = "github-idea-finder/0.2"
-STATE_VERSION = 3
+STATE_VERSION = 4
+EXPERIENCE_VERSION = 1
+# Experience entries that share the same normalized key are considered the
+# same lesson; learn() merges by replacing the previous entry so the file does
+# not grow without bound.
+EXPERIENCE_ENTRY_SEPARATOR = "\n---\n"
 # Only accept the two path segments that identify a repository. This avoids
 # treating /issues, /pull, /blob, and GitHub asset URLs as repositories.
 GITHUB_REPO_RE = re.compile(
@@ -194,6 +205,7 @@ def empty_state(idea: str = "") -> dict[str, Any]:
         "candidates": {},
         "discovered_terms": [],
         "related_repositories": [],
+        "experience_file": None,
         "budget": {"max_rounds": 4, "max_searches": 30, "max_inspections": 50},
     }
 
@@ -210,6 +222,129 @@ def load_state(path: Path, idea: str = "") -> dict[str, Any]:
 def save_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def default_experience_file() -> Path:
+    return Path.cwd() / "work" / "github-idea-experience.md"
+
+
+def normalize_experience_key(text: str) -> str:
+    """Normalize a lesson key so learn() can detect duplicates regardless of
+    quoting or casing. 'which queries work well' and 'which queries work well!'
+    collapse to the same entry; a very short or non-tagged lesson is not
+    considered a heading and is kept as-is (matched by its text)."""
+    return re.sub(r"[^a-z0-9]+", " ", text.strip().lower()).strip()
+
+
+def experience_file_entries(path: Path) -> list[dict[str, Any]]:
+    """Parse an experience file back into a list of entries.
+
+    The file is a Markdown document. An entry is:
+    - a heading line ("## domain") that becomes `domain`, plus
+    - a "Key: value" line under it that becomes the entry key, and
+    - a body of remaining lines.
+    Headings are used as grouping labels; the actual dedup key is the
+    normalized `key`. `text` is always the body only (no heading or Key
+    line), so it round-trips cleanly through write_experience_file. A block
+    that only has a heading (no key line) is treated as a section header and
+    is preserved as `header_only`.
+    """
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    blocks = text.split(EXPERIENCE_ENTRY_SEPARATOR)
+    entries: list[dict[str, Any]] = []
+    for block in blocks:
+        block = block.strip()
+        if not block:
+            continue
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        domain = None
+        for line in lines:
+            m = re.match(r"^#{1,6}\s+(.+)$", line)
+            if m:
+                domain = m.group(1).strip()
+            else:
+                break
+        key_line = next((line for line in lines if line.lower().startswith("key:")), None)
+        key = key_line.split(":", 1)[1].strip() if key_line else None
+        # Body is everything after the heading and key lines.
+        body_lines: list[str] = []
+        for line in lines:
+            if re.match(r"^#{1,6}\s+", line) or line.lower().startswith("key:"):
+                continue
+            body_lines.append(line)
+        if not key and not domain:
+            # A stray block without a heading or key is not a valid entry.
+            continue
+        entries.append({
+            "domain": domain,
+            "key": key,
+            "key_norm": normalize_experience_key(key) if key else "",
+            "text": "\n".join(body_lines),
+            "header_only": not key,
+        })
+    return entries
+
+
+def write_experience_file(path: Path, entries: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    for entry in entries:
+        block: list[str] = []
+        if entry.get("domain"):
+            block.append(f"## {entry['domain']}")
+        if entry.get("key"):
+            block.append(f"Key: {entry['key']}")
+        block.append(entry.get("text", ""))
+        lines.append("\n".join(line for line in block if line))
+    path.write_text(("\n\n" + EXPERIENCE_ENTRY_SEPARATOR + "\n\n").join(lines).strip() + "\n", encoding="utf-8")
+
+
+def learn_experience(path: Path, domain: str | None, key: str, body: str) -> dict[str, Any]:
+    """Merge a new lesson into the experience file.
+
+    Deduplication is by the normalized key: a later entry with the same key
+    replaces the previous one (so the file converges instead of growing).
+    Header-only blocks (sections) are preserved in place. The returned dict
+    describes what changed and the entry's normalized key so the caller (or
+    the Agent) can reason about the write."""
+    entries = experience_file_entries(path)
+    key_norm = normalize_experience_key(key)
+    existing_idx = None
+    for idx, entry in enumerate(entries):
+        if not entry["header_only"] and entry["key_norm"] == key_norm:
+            existing_idx = idx
+            break
+    entry = {"domain": domain, "key": key, "key_norm": key_norm, "text": body}
+    if existing_idx is not None:
+        entries[existing_idx] = entry
+        changed = "replaced"
+    else:
+        entries.append(entry)
+        changed = "added"
+    write_experience_file(path, entries)
+    return {"key": key, "key_norm": key_norm, "changed": changed, "path": str(path)}
+
+
+def experience_digest(path: Path) -> dict[str, Any]:
+    """Return a compact summary of the experience file for the Agent to read
+    before starting a new search session. Includes per-domain counts and the
+    raw Markdown (bounded) so a fresh session can inherit prior lessons."""
+    entries = experience_file_entries(path)
+    domains: dict[str, int] = {}
+    for entry in entries:
+        if not entry["header_only"] and entry["domain"]:
+            domains[entry["domain"]] = domains.get(entry["domain"], 0) + 1
+    text = ""
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+    return {
+        "path": str(path),
+        "entry_count": sum(1 for e in entries if not e["header_only"]),
+        "domains": domains,
+        "content": text,
+    }
 
 
 def repo_links(readme: str | None) -> list[str]:
@@ -361,6 +496,8 @@ def session(args: argparse.Namespace) -> dict[str, Any]:
     state = load_state(state_path, args.idea or "")
     if args.idea:
         state["idea"] = args.idea
+    if args.experience_file:
+        state["experience_file"] = str(Path(args.experience_file).resolve())
     if args.max_rounds:
         state["budget"]["max_rounds"] = args.max_rounds
     if args.max_searches:
@@ -368,7 +505,21 @@ def session(args: argparse.Namespace) -> dict[str, Any]:
     if args.max_inspections:
         state["budget"]["max_inspections"] = args.max_inspections
     save_state(state_path, state)
-    return {"action": "session", "state": state, "session_file": str(state_path)}
+    result: dict[str, Any] = {"action": "session", "state": state, "session_file": str(state_path)}
+    if state.get("experience_file"):
+        result["experience"] = experience_digest(Path(state["experience_file"]))
+    return result
+
+
+def experience(args: argparse.Namespace) -> dict[str, Any]:
+    path = Path(args.experience_file) if args.experience_file else default_experience_file()
+    return {"action": "experience", "digest": experience_digest(path)}
+
+
+def learn(args: argparse.Namespace) -> dict[str, Any]:
+    path = Path(args.experience_file) if args.experience_file else default_experience_file()
+    result = learn_experience(path, args.domain or None, args.key, args.body)
+    return {"action": "learn", "learned": result, "digest": experience_digest(path)}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -378,9 +529,19 @@ def parser() -> argparse.ArgumentParser:
     session_parser = sub.add_parser("session")
     session_parser.add_argument("--state-file", required=True)
     session_parser.add_argument("--idea")
+    session_parser.add_argument("--experience-file", help="Markdown file that accumulates cross-session lessons (default: work/github-idea-experience.md)")
     session_parser.add_argument("--max-rounds", type=int)
     session_parser.add_argument("--max-searches", type=int)
     session_parser.add_argument("--max-inspections", type=int)
+
+    experience_parser = sub.add_parser("experience", help="Show the accumulated experience digest before starting a session")
+    experience_parser.add_argument("--experience-file")
+
+    learn_parser = sub.add_parser("learn", help="Append or merge one lesson into the experience file")
+    learn_parser.add_argument("--experience-file")
+    learn_parser.add_argument("--domain", help="Section heading, e.g. 'ai-agent-desktop'")
+    learn_parser.add_argument("--key", required=True, help="Short stable label for the lesson, used for dedup")
+    learn_parser.add_argument("--body", required=True, help="The lesson body the Agent writes")
 
     search_parser = sub.add_parser("search")
     search_parser.add_argument("--state-file", required=True)

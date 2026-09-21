@@ -4,7 +4,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from github_discovery import build_search_query, empty_state, load_state, repo_links, route_queries, save_state, search
+from github_discovery import (
+    build_search_query,
+    empty_state,
+    experience_digest,
+    experience_file_entries,
+    learn_experience,
+    load_state,
+    normalize_experience_key,
+    repo_links,
+    route_queries,
+    save_state,
+    search,
+)
 
 
 class DiscoveryStateTests(unittest.TestCase):
@@ -20,7 +32,7 @@ class DiscoveryStateTests(unittest.TestCase):
     def test_missing_state_is_initialized(self):
         with tempfile.TemporaryDirectory() as directory:
             state = load_state(Path(directory) / "missing.json", "new idea")
-            self.assertEqual(state["version"], 3)
+            self.assertEqual(state["version"], 4)
             self.assertEqual(state["idea"], "new idea")
             self.assertEqual(state["round"], 0)
 
@@ -92,6 +104,54 @@ class DiscoveryStateTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     inspect(args)
                 enrich.assert_not_called()
+
+
+class ExperienceTests(unittest.TestCase):
+    def test_normalize_key_collapses_case_and_punctuation(self):
+        self.assertEqual(
+            normalize_experience_key("  Which Queries Work Well?  "),
+            "which queries work well",
+        )
+
+    def test_learn_appends_then_replaces_same_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "experience.md"
+            first = learn_experience(path, "ai-agent-desktop", "which queries work well", "Use the query families ...")
+            self.assertEqual(first["changed"], "added")
+            second = learn_experience(path, "ai-agent-desktop", "which queries work well!", "Updated lesson body")
+            self.assertEqual(second["changed"], "replaced")
+            entries = experience_file_entries(path)
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["key_norm"], "which queries work well")
+            self.assertIn("Updated lesson body", entries[0]["text"])
+            self.assertNotIn("Use the query families", entries[0]["text"])
+
+    def test_learn_preserves_distinct_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "experience.md"
+            learn_experience(path, "ai-agent-desktop", "query families", "family A")
+            learn_experience(path, "ai-agent-desktop", "judgment standards", "standard B")
+            entries = experience_file_entries(path)
+            self.assertEqual(len(entries), 2)
+
+    def test_digest_reports_domain_counts_and_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "experience.md"
+            learn_experience(path, "ai-agent-desktop", "query families", "family A")
+            learn_experience(path, "ai-agent-desktop", "pitfalls", "pitfall B")
+            learn_experience(path, "server", "mcp cwd", "lesson C")
+            digest = experience_digest(path)
+            self.assertEqual(digest["entry_count"], 3)
+            self.assertEqual(digest["domains"]["ai-agent-desktop"], 2)
+            self.assertEqual(digest["domains"]["server"], 1)
+            self.assertIn("family A", digest["content"])
+
+    def test_digest_of_missing_file_is_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            digest = experience_digest(Path(directory) / "missing.md")
+            self.assertEqual(digest["entry_count"], 0)
+            self.assertEqual(digest["domains"], {})
+            self.assertEqual(digest["content"], "")
 
 
 if __name__ == "__main__":

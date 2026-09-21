@@ -14,6 +14,7 @@
 - 根据 README 证据判断 GUI、独立运行、工具调用、多步骤任务等能力
 - 区分完整产品、客户端/管理层、Agent runtime、组件、基础设施和资源列表
 - 输出 `adopt`、`pilot` 或 `watch` 建议，以及缺口和维护信号
+- 把跨会话沉淀的搜索与判断经验写回经验文件，让 skill 越用越好用
 
 它不承诺穷尽 GitHub，也不把 Stars 当作产品匹配度。
 
@@ -39,6 +40,14 @@ README / 元数据检查
 
 发现和判断是两个阶段：搜索阶段尽量保留候选，判断阶段才依据 README 和项目形态做语义筛选。项目名称中出现 `skill`、`workflow`、`MCP` 等词不会直接导致项目被丢弃；最终是否匹配由 Search Brief 和证据决定。
 
+## 经验沉淀：越用越好用
+
+每次会话结束后，可以把值得长期记住的经验写进一个跨会话的 Markdown 经验文件（默认 `work/github-idea-experience.md`），例如哪些查询词命中率高、哪些判断标准有效、踩过哪些坑。下次新会话开始前，先读取经验摘要，用它初始化搜索策略和判断口径，相当于「站在之前会话的肩膀上」而不是每次从零开始。
+
+- 经验按领域分组（如 `ai-agent-desktop`、`server`），一条经验由 `key` 唯一标识；
+- 相同 `key` 的新经验会**替换**旧经验，文件只会收敛、不会无限膨胀；
+- 经验是「参考」而不是「硬约束」：Agent 仍以当前 README 证据为准，经验只是帮它更快出发。
+
 ## 目录结构
 
 ```text
@@ -48,7 +57,7 @@ github-idea-finder/
 ├── .env.example                # 环境变量示例
 ├── agents/openai.yaml          # Skill 展示信息
 └── scripts/
-    ├── github_discovery.py     # 新版有状态、多轮搜索入口
+    ├── github_discovery.py     # 新版有状态、多轮搜索入口（含经验沉淀）
     └── test_github_discovery.py
 ```
 
@@ -82,10 +91,23 @@ GITHUB_TOKEN=ghp_your_token_here
 python scripts/github_discovery.py session `
   --state-file work/github-idea-session.json `
   --idea "完整产品，类似 Codex App 的有 GUI、可独立运行的通用 AI Agent，支持工具调用和多步骤任务" `
+  --experience-file work/github-idea-experience.md `
   --max-rounds 4 `
   --max-searches 30 `
   --max-inspections 50
 ```
+
+`--experience-file` 指向跨会话经验文件（省略时默认 `work/github-idea-experience.md`）。会话开始时读取，结束时用 `learn` 写入。
+
+### 0. 读取历史经验（可选，建议）
+
+新会话开始前，先看经验摘要，把历史教训纳入本次的搜索计划和判断口径：
+
+```powershell
+python scripts/github_discovery.py experience --experience-file work/github-idea-experience.md
+```
+
+返回经验条数、按领域分布和经验内容全文。
 
 ### 2. 执行第一轮搜索
 
@@ -138,6 +160,24 @@ multi-agent workforce desktop in:readme
 
 不要重复已经使用过的查询。达到轮次、搜索次数或检查次数预算后，或者领先候选已经有足够证据时即可停止。
 
+### 5. 沉淀经验（会话结束后）
+
+把值得长期记住的经验写回经验文件，让下次会话直接受益：
+
+```powershell
+python scripts/github_discovery.py learn `
+  --experience-file work/github-idea-experience.md `
+  --domain "ai-agent-desktop" `
+  --key "which queries work well" `
+  --body "桌面 AI Agent 检索命中：'open source AI agent'、'desktop AI agent'、'agent harness desktop app'，并各自补一条 in:readme 路线。"
+```
+
+- `--domain`：经验所属领域，作为 Markdown 分组标题；
+- `--key`：经验短标签，用于去重——相同 key 会替换旧条目；
+- `--body`：经验正文，Agent 用自然语言描述可复用的结论。
+
+只沉淀**跨会话、可复用**的经验（查询族、判断标准、常见坑），不要写某个项目的细节。
+
 ## 结果判定
 
 最终报告至少应说明以下内容：
@@ -179,6 +219,7 @@ python -m unittest discover -s scripts -p "test_*.py" -v
 4. **产品形态是证据，不是自动过滤器。** 一个项目可能不是完整产品，但仍可能是有价值的 Agent runtime 或 GUI 管理层；报告中应正确分类。
 5. **匹配度和健康度分开。** Star、Fork、最近提交等只能作为维护信号，不能替代功能证据。
 6. **明确不确定性。** README 没有证明的能力应标记为 `uncertain`，而不是根据项目宣传语推断为已支持。
+7. **经验跨会话沉淀。** 每次会话把可复用的搜索与判断经验写回经验文件，新会话先读取再出发；经验是参考不是硬约束，判断仍以当前 README 证据为准。
 
 ## 已知限制
 

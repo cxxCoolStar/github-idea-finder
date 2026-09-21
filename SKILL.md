@@ -9,6 +9,19 @@ Find a defensible shortlist of GitHub repositories from a product idea. Search i
 
 ## Agent Loop
 
+0. Before creating a new session, if an experience file exists from previous
+   sessions, read its digest so this session inherits prior lessons:
+
+   ```powershell
+   python scripts/github_discovery.py experience --experience-file work/github-idea-experience.md
+   ```
+
+   The digest reports how many lessons exist, which domains they cover, and
+   the raw Markdown. Apply high-value lessons (working query families,
+   effective judgment standards, known pitfalls) when building this session's
+   Search Plan and evidence checks. Treat the digest as a starting point, not
+   a constraint: verify against current README evidence as usual.
+
 1. Apply the clarification gate before any search:
    - Decide whether the request already provides enough information to form a concrete Search Brief. A request is broad when product form, target user/use case, or the core outcome is still ambiguous (for example, "find an agriculture pest project").
    - For a broad request, ask 3-5 high-value questions covering: complete product vs. algorithm/dataset/component/infrastructure; target user and job to be done; 3-8 must-have capabilities and expected inputs/outputs; and important platform, deployment, model, license, or maintenance constraints.
@@ -23,8 +36,10 @@ Find a defensible shortlist of GitHub repositories from a product idea. Search i
 2. Create a session file outside the Skill directory, for example `work/github-idea-session.json`:
 
    ```powershell
-   python scripts/github_discovery.py session --state-file work/github-idea-session.json --idea "<original idea>" --max-rounds 4 --max-searches 30 --max-inspections 50
+   python scripts/github_discovery.py session --state-file work/github-idea-session.json --idea "<original idea>" --experience-file work/github-idea-experience.md --max-rounds 4 --max-searches 30 --max-inspections 50
    ```
+
+   `--experience-file` points at the cross-session lesson file (default when omitted: `work/github-idea-experience.md`). It is read when the session starts and written by `learn` at the end.
 
 3. Generate a Search Plan, not just aliases. Include several short query families:
    - category: `open source AI agent`, `open source AI assistant`;
@@ -57,6 +72,18 @@ Find a defensible shortlist of GitHub repositories from a product idea. Search i
    - two consecutive rounds produce no new high-value repositories;
    - the leading candidates have sufficient evidence for comparison;
    - remaining results are duplicates, forks, resource lists, or clearly outside the Search Brief.
+9. After the final report, persist what is worth remembering. Write at most a
+   few durable lessons with `learn` — working query families, judgment
+   standards that proved useful, and pitfalls that cost time. Keep lessons
+   short, stable, and cross-session (not per-project details). Reusing the
+   same key replaces the previous entry, so the file converges instead of
+   growing without bound:
+
+   ```powershell
+   python scripts/github_discovery.py learn --experience-file work/github-idea-experience.md --domain "ai-agent-desktop" --key "which queries work well" --body "Desktop AI agent searches hit with: 'open source AI agent', 'desktop AI agent', 'agent harness desktop app', each also routed in:readme."
+   ```
+
+   Skip `learn` if nothing generalizable was found this session.
 
 ## Search Plan And Evidence
 
@@ -90,7 +117,9 @@ Never use Stars as a proxy for product fit, and never claim that the search foun
 The Agent-facing entry point is `scripts/github_discovery.py`:
 
 - `session` creates or updates the bounded search ledger;
+- `experience` prints the cross-session lesson digest before a new session;
 - `search` performs one new query round and records discovery provenance;
-- `inspect` fetches repository evidence and extracts README-linked repositories.
+- `inspect` fetches repository evidence and extracts README-linked repositories;
+- `learn` appends or merges one durable lesson into the experience file.
 
-The script is intentionally not an autonomous LLM. The calling Agent chooses the next action while the script provides deterministic GitHub retrieval and state management.
+The script is intentionally not an autonomous LLM. The calling Agent chooses the next action while the script provides deterministic GitHub retrieval, state management, and lesson persistence.
